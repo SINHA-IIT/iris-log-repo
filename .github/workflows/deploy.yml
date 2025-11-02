@@ -1,0 +1,58 @@
+name: Deploy IRIS API to GKE (Keyless)
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write    # Needed for OIDC authentication
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ✅ Authenticate to Google Cloud using Workload Identity Federation (no key)
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          token_format: access_token
+          workload_identity_provider: "projects/940190263143/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+          service_account: "github-actions@swift-yew-472812-c6.iam.gserviceaccount.com"
+
+      # ✅ Setup gcloud CLI
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: swift-yew-472812-c6
+
+      # ✅ Configure Docker to use Artifact Registry
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      # ✅ Build the Docker image
+      - name: Build Docker image
+        run: |
+          docker build -t us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest .
+
+      # ✅ Push the image to Google Artifact Registry
+      - name: Push Docker image to Artifact Registry
+        run: |
+          docker push us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest
+
+      # ✅ Connect to your GKE cluster
+      - name: Connect to GKE cluster
+        run: |
+          gcloud container clusters get-credentials gke-iris-cluster --region us-central1 --project swift-yew-472812-c6
+
+      # ✅ Deploy updated image to GKE
+      - name: Deploy to GKE
+        run: |
+          kubectl set image deployment/iris-api-deployment iris-api=us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest
+          kubectl rollout status deployment/iris-api-deployment
+
