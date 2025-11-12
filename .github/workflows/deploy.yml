@@ -6,7 +6,7 @@ on:
       - main
 
 permissions:
-  id-token: write    # Needed for OIDC authentication
+  id-token: write    # Required for OIDC authentication
   contents: read
 
 jobs:
@@ -14,10 +14,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ✅ Step 1: Checkout the code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ✅ Authenticate to Google Cloud using Workload Identity Federation (no key)
+      # ✅ Step 2: Authenticate to Google Cloud using Workload Identity Federation (no key.json)
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -25,34 +26,70 @@ jobs:
           workload_identity_provider: "projects/940190263143/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
           service_account: "github-actions@swift-yew-472812-c6.iam.gserviceaccount.com"
 
-      # ✅ Setup gcloud CLI
+      # ✅ Step 3: Setup gcloud CLI
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: swift-yew-472812-c6
 
-      # ✅ Configure Docker to use Artifact Registry
+      # ✅ Step 4: Configure Docker for Google Artifact Registry
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
-      # ✅ Build the Docker image
+      # ✅ Step 5: Build Docker image
       - name: Build Docker image
         run: |
           docker build -t us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest .
 
-      # ✅ Push the image to Google Artifact Registry
+      # ✅ Step 6: Push Docker image to Artifact Registry
       - name: Push Docker image to Artifact Registry
         run: |
           docker push us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest
 
-      # ✅ Connect to your GKE cluster
+      # ✅ Step 7: Install the GKE authentication plugin (Ubuntu 24.04 safe)
+      - name: Install GKE gcloud auth plugin
+        run: |
+          echo "Installing GKE gcloud auth plugin (Ubuntu 24.04 safe)..."
+          sudo apt-get update -y
+          sudo apt-get install -y apt-transport-https ca-certificates gnupg curl
+          sudo mkdir -p /usr/share/keyrings
+          curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | \
+            gpg --dearmor | sudo tee /usr/share/keyrings/cloud.google.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | \
+            sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list
+          sudo apt-get update -y
+          sudo apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin
+          echo "USE_GKE_GCLOUD_AUTH_PLUGIN=True" >> $GITHUB_ENV
+
+            # ✅ Step 8: Connect to GKE cluster (with verification)
       - name: Connect to GKE cluster
         run: |
-          gcloud container clusters get-credentials gke-iris-cluster --region us-central1 --project swift-yew-472812-c6
+          echo "Authenticating to GKE cluster..."
+          export USE_GKE_GCLOUD_AUTH_PLUGIN=True
+          gcloud container clusters get-credentials gke-iris-cluster \
+            --region us-central1 \
+            --project swift-yew-472812-c6
+          
+          echo "Verifying connection..."
+          kubectl cluster-info
+          kubectl get nodes
 
-      # ✅ Deploy updated image to GKE
-      - name: Deploy to GKE
+      # ✅ Step 9: Deploy to GKE (create or update)
+      - name: Deploy to GKE (create or update)
         run: |
-          kubectl set image deployment/iris-api-deployment iris-api=us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest
-          kubectl rollout status deployment/iris-api-deployment
+          set -e
+          export USE_GKE_GCLOUD_AUTH_PLUGIN=True
+          echo "Checking if deployment exists..."
+          if kubectl get deployment iris-api-deployment >/dev/null 2>&1; then
+            echo "Deployment exists — updating image..."
+            kubectl set image deployment/iris-api-deployment iris-api=us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest
+          else
+            echo "Deployment not found — creating a new one..."
+            kubectl create deployment iris-api-deployment \
+              --image=us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest
+            kubectl expose deployment iris-api-deployment \
+              --type=LoadBalancer --port=80 --target-port=5000
+          fi
 
+          echo "Waiting for rollout..."
+          kubectl rollout status deployment/iris-api-deployment --timeout=180s
