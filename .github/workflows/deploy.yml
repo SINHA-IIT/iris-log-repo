@@ -1,4 +1,4 @@
-name: Deploy IRIS API to GKE (Keyless)
+name: CI 
 
 on:
   push:
@@ -39,12 +39,12 @@ jobs:
       # ✅ Step 5: Build Docker image
       - name: Build Docker image
         run: |
-          docker build -t us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest .
+          docker build -t us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-log:latest .
 
       # ✅ Step 6: Push Docker image to Artifact Registry
       - name: Push Docker image to Artifact Registry
         run: |
-          docker push us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest
+          docker push us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-log:latest
 
       # ✅ Step 7: Install the GKE authentication plugin (Ubuntu 24.04 safe)
       - name: Install GKE gcloud auth plugin
@@ -80,16 +80,33 @@ jobs:
           set -e
           export USE_GKE_GCLOUD_AUTH_PLUGIN=True
           echo "Checking if deployment exists..."
-          if kubectl get deployment iris-api-deployment >/dev/null 2>&1; then
+          if kubectl get deployment iris-log-ml-service >/dev/null 2>&1; then
             echo "Deployment exists — updating image..."
-            kubectl set image deployment/iris-api-deployment iris-api=us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest
+            kubectl set image deployment/iris-api-deployment iris-api=us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-log:latest
           else
             echo "Deployment not found — creating a new one..."
-            kubectl create deployment iris-api-deployment \
-              --image=us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-api:latest
-            kubectl expose deployment iris-api-deployment \
+            kubectl create deployment iris-log-ml-service \
+              --image=us-central1-docker.pkg.dev/swift-yew-472812-c6/my-repo/iris-log:latest
+            kubectl expose deployment iris-log-ml-service \
               --type=LoadBalancer --port=80 --target-port=5000
           fi
 
           echo "Waiting for rollout..."
-          kubectl rollout status deployment/iris-api-deployment --timeout=180s
+          kubectl rollout status deployment/iris-log-ml-service --timeout=180s
+
+       # ✅ Step 10: Stress test the deployed API using wrk
+      - name: Stress test API with wrk (1000 requests)
+        run: |
+          echo "Installing wrk for load testing..."
+          sudo apt-get update -y
+          sudo apt-get install -y wrk
+
+          echo "Fetching service external IP..."
+          export SERVICE_IP=$(kubectl get svc iris-api-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "Service IP: $SERVICE_IP"
+
+          echo "Running stress test with 1000 concurrent requests..."
+          wrk -t12 -c1000 -d30s http://$SERVICE_IP/predict || true
+
+          echo "✅ Stress test completed successfully."
+
