@@ -21,5 +21,6 @@ EXPOSE 8200
 
 # Command to run the server
 
-CMD ["uvicorn", "iris_fastapi:app", "--host", "0.0.0.0", "--port", "8200"]
+CMD ["uvicorn", "iris_log:app", "--host", "0.0.0.0", "--port", "8200"]
+
 
